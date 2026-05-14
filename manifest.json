@@ -12,7 +12,8 @@
       "matches": ["*://*.tiktok.com/*"],
       "js": ["inject.js"],
       "run_at": "document_start",
-      "all_frames": true
+      "all_frames": true,
+      "world": "MAIN"
     },
     {
       "matches": ["*://*.tiktok.com/*"],
