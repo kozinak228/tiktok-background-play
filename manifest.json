@@ -3,10 +3,19 @@
   "name": "TikTok Background Play & PiP",
   "version": "1.0.0",
   "description": "Позволяет смотреть TikTok в фоновом режиме и в плавающем окне (Picture-in-Picture)",
-  "permissions": [],
+  "permissions": ["declarativeNetRequest"],
   "host_permissions": [
     "*://*.tiktok.com/*"
   ],
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "tiktok_unblock_pip",
+        "enabled": true,
+        "path": "rules.json"
+      }
+    ]
+  },
   "content_scripts": [
     {
       "matches": ["*://*.tiktok.com/*"],
