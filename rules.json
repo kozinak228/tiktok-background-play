@@ -16,10 +16,12 @@
       ]
     },
     "condition": {
-      "urlFilter": "*://www.tiktok.com/*",
+      "urlFilter": "||tiktok.com",
       "resourceTypes": [
         "main_frame",
-        "sub_frame"
+        "sub_frame",
+        "xmlhttprequest",
+        "other"
       ]
     }
   }

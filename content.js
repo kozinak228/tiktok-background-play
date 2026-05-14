@@ -112,10 +112,146 @@
     }, 500);
   }
 
+  // ── Document PiP fallback (floating browser window) ──────────────
+  let docPipWindow = null;
+
+  async function openDocumentPiP(video) {
+    try {
+      if (!('documentPictureInPicture' in window)) {
+        showNotification('Document PiP не поддерживается вашим браузером. Обновите Opera.');
+        return false;
+      }
+
+      const pipWindow = await window.documentPictureInPicture.requestWindow({
+        width: 400,
+        height: 720
+      });
+
+      docPipWindow = pipWindow;
+
+      // Add styles to the PiP window
+      const style = pipWindow.document.createElement('style');
+      style.textContent = `
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+          background: #000;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          height: 100vh;
+          overflow: hidden;
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        }
+        video {
+          width: 100%;
+          height: 100%;
+          object-fit: contain;
+        }
+        .pip-controls {
+          position: fixed;
+          bottom: 12px;
+          left: 50%;
+          transform: translateX(-50%);
+          display: flex;
+          gap: 16px;
+          z-index: 10;
+          opacity: 0;
+          transition: opacity 0.25s;
+        }
+        body:hover .pip-controls { opacity: 1; }
+        .pip-btn {
+          width: 44px;
+          height: 44px;
+          border-radius: 50%;
+          border: none;
+          background: rgba(255,255,255,0.15);
+          backdrop-filter: blur(8px);
+          color: white;
+          font-size: 20px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          transition: background 0.2s;
+        }
+        .pip-btn:hover { background: rgba(255,255,255,0.3); }
+      `;
+      pipWindow.document.head.appendChild(style);
+
+      // Clone the video into the PiP window
+      const clonedVideo = video.cloneNode(true);
+      clonedVideo.src = video.src;
+      clonedVideo.currentTime = video.currentTime;
+      clonedVideo.muted = video.muted;
+      clonedVideo.volume = video.volume;
+      clonedVideo.autoplay = true;
+      clonedVideo.loop = true;
+      pipWindow.document.body.appendChild(clonedVideo);
+
+      // Add scroll controls (prev/next)
+      const controls = pipWindow.document.createElement('div');
+      controls.className = 'pip-controls';
+      controls.innerHTML = `
+        <button class="pip-btn" id="pip-prev" title="Предыдущее видео">⬆</button>
+        <button class="pip-btn" id="pip-next" title="Следующее видео">⬇</button>
+      `;
+      pipWindow.document.body.appendChild(controls);
+
+      // Connect scroll buttons to the main page
+      pipWindow.document.getElementById('pip-next').addEventListener('click', () => {
+        document.dispatchEvent(new KeyboardEvent('keydown', {
+          key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, bubbles: true, cancelable: true
+        }));
+        // Wait for new video to load, then swap it
+        setTimeout(() => swapDocPipVideo(pipWindow), 800);
+      });
+
+      pipWindow.document.getElementById('pip-prev').addEventListener('click', () => {
+        document.dispatchEvent(new KeyboardEvent('keydown', {
+          key: 'ArrowUp', code: 'ArrowUp', keyCode: 38, bubbles: true, cancelable: true
+        }));
+        setTimeout(() => swapDocPipVideo(pipWindow), 800);
+      });
+
+      // Clean up on close
+      pipWindow.addEventListener('pagehide', () => {
+        docPipWindow = null;
+        pipButton.classList.remove('pip-active');
+      });
+
+      pipButton.classList.add('pip-active');
+      return true;
+
+    } catch (err) {
+      console.error('[TikTok BG Play] Document PiP error:', err);
+      return false;
+    }
+  }
+
+  function swapDocPipVideo(pipWindow) {
+    const newVideo = findActiveVideo();
+    if (!newVideo) return;
+
+    const oldVideo = pipWindow.document.querySelector('video');
+    if (oldVideo) {
+      oldVideo.src = newVideo.src;
+      oldVideo.currentTime = 0;
+      oldVideo.play().catch(() => {});
+    }
+  }
+
   // ── Toggle PiP mode ────────────────────────────────────────────
   async function togglePiP() {
     try {
-      // If already in PiP, exit
+      // If Document PiP is open, close it
+      if (docPipWindow && !docPipWindow.closed) {
+        docPipWindow.close();
+        docPipWindow = null;
+        pipButton.classList.remove('pip-active');
+        return;
+      }
+
+      // If standard PiP is active, exit
       if (document.pictureInPictureElement) {
         await document.exitPictureInPicture();
         pipButton.classList.remove('pip-active');
@@ -139,26 +275,19 @@
         return;
       }
 
-      // Opera/Chrome require the video to be playing before PiP
+      // Ensure video is playing
       if (video.paused) {
-        try {
-          await video.play();
-        } catch (e) {
-          console.log('[TikTok BG Play] Could not auto-play before PiP:', e);
-        }
+        try { await video.play(); } catch (e) {}
       }
 
+      // Try standard PiP first
       try {
         await video.requestPictureInPicture();
         currentPipVideo = video;
         pipButton.classList.add('pip-active');
-        
-        // Start tracking to automatically swap PiP when scrolling
         startPipTracker();
 
-        // Listen for PiP close
         video.addEventListener('leavepictureinpicture', () => {
-          // Only remove active state if we didn't just swap to a new PiP video
           setTimeout(() => {
             if (!document.pictureInPictureElement) {
               pipButton.classList.remove('pip-active');
@@ -167,22 +296,20 @@
             }
           }, 100);
         }, { once: true });
+        return; // Success!
         
       } catch (err) {
-        console.error('[TikTok BG Play] PiP request error:', err.name, err.message, err);
-        if (err.name === 'NotSupportedError' || err.message.includes('not available')) {
-          showNotification('PiP недоступен для этого поста');
-        } else if (err.name === 'NotAllowedError') {
-          showNotification('Браузер заблокировал PiP — попробуйте нажать кнопку ещё раз');
-        } else if (err.name === 'InvalidStateError') {
-          showNotification('Видео не готово — подождите и попробуйте снова');
-        } else {
-          showNotification('Ошибка PiP (' + err.name + '): ' + (err.message || 'неизвестная ошибка'));
-        }
+        console.warn('[TikTok BG Play] Standard PiP failed, trying Document PiP...', err.name);
+      }
+
+      // Fallback: Document PiP (floating browser window)
+      const success = await openDocumentPiP(video);
+      if (!success) {
+        showNotification('PiP недоступен — попробуйте включить флаг opera://flags/#document-picture-in-picture-api');
       }
 
     } catch (err) {
-      console.error('[TikTok BG Play] PiP wrapper error:', err.name, err.message, err);
+      console.error('[TikTok BG Play] PiP error:', err);
       showNotification('Произошла ошибка PiP');
     }
   }
