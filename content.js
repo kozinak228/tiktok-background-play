@@ -130,14 +130,22 @@
         return;
       }
 
-      // Hard-force PiP enabling (fixes the "not available" error on some normal videos)
+      // Hard-force PiP enabling
       video.disablePictureInPicture = false;
       video.removeAttribute('disablepictureinpicture');
-      video.setAttribute('controlslist', 'nodownload'); // Sometimes helps trick browser policies
 
-      if (video.readyState === 0) {
+      if (video.readyState < 2) {
         showNotification('Видео еще загружается, подождите секунду');
         return;
+      }
+
+      // Opera/Chrome require the video to be playing before PiP
+      if (video.paused) {
+        try {
+          await video.play();
+        } catch (e) {
+          console.log('[TikTok BG Play] Could not auto-play before PiP:', e);
+        }
       }
 
       try {
@@ -161,16 +169,20 @@
         }, { once: true });
         
       } catch (err) {
-        console.error('[TikTok BG Play] PiP request error:', err);
-        if (err.message.includes('not available') || err.name === 'NotSupportedError') {
-          showNotification('PiP недоступен для этого поста (возможно, это фото-карусель)');
+        console.error('[TikTok BG Play] PiP request error:', err.name, err.message, err);
+        if (err.name === 'NotSupportedError' || err.message.includes('not available')) {
+          showNotification('PiP недоступен для этого поста');
+        } else if (err.name === 'NotAllowedError') {
+          showNotification('Браузер заблокировал PiP — попробуйте нажать кнопку ещё раз');
+        } else if (err.name === 'InvalidStateError') {
+          showNotification('Видео не готово — подождите и попробуйте снова');
         } else {
-          showNotification('Не удалось открыть PiP: ' + err.message);
+          showNotification('Ошибка PiP (' + err.name + '): ' + (err.message || 'неизвестная ошибка'));
         }
       }
 
     } catch (err) {
-      console.error('[TikTok BG Play] PiP wrapper error:', err);
+      console.error('[TikTok BG Play] PiP wrapper error:', err.name, err.message, err);
       showNotification('Произошла ошибка PiP');
     }
   }
