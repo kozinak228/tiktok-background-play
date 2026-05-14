@@ -203,20 +203,44 @@
       `;
       pipWindow.document.body.appendChild(controls);
 
+      // Helper: scroll TikTok feed to next/previous video
+      function scrollTikTok(direction) {
+        const key = direction === 'down' ? 'ArrowDown' : 'ArrowUp';
+        const keyCode = direction === 'down' ? 40 : 38;
+        const eventOpts = {
+          key, code: key, keyCode, which: keyCode,
+          bubbles: true, cancelable: true, composed: true
+        };
+
+        // Dispatch on multiple targets — TikTok listens on different elements
+        window.dispatchEvent(new KeyboardEvent('keydown', eventOpts));
+        document.dispatchEvent(new KeyboardEvent('keydown', eventOpts));
+        document.body.dispatchEvent(new KeyboardEvent('keydown', eventOpts));
+
+        // Also try direct scroll as fallback
+        const scrollAmount = direction === 'down' ? window.innerHeight : -window.innerHeight;
+        
+        // Find TikTok's scroll container
+        const scrollContainer = document.querySelector('[class*="DivVideoFeedV2"]')
+          || document.querySelector('[data-e2e="recommend-list-item-container"]')?.parentElement
+          || document.querySelector('main')
+          || document.documentElement;
+        
+        if (scrollContainer) {
+          scrollContainer.scrollBy({ top: scrollAmount, behavior: 'smooth' });
+        }
+        window.scrollBy({ top: scrollAmount, behavior: 'smooth' });
+      }
+
       // Connect scroll buttons to the main page
       pipWindow.document.getElementById('pip-next').addEventListener('click', () => {
-        document.dispatchEvent(new KeyboardEvent('keydown', {
-          key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, bubbles: true, cancelable: true
-        }));
-        // Wait for new video to load, then swap it
-        setTimeout(() => swapDocPipVideo(pipWindow), 800);
+        scrollTikTok('down');
+        setTimeout(() => swapDocPipVideo(pipWindow), 1200);
       });
 
       pipWindow.document.getElementById('pip-prev').addEventListener('click', () => {
-        document.dispatchEvent(new KeyboardEvent('keydown', {
-          key: 'ArrowUp', code: 'ArrowUp', keyCode: 38, bubbles: true, cancelable: true
-        }));
-        setTimeout(() => swapDocPipVideo(pipWindow), 800);
+        scrollTikTok('up');
+        setTimeout(() => swapDocPipVideo(pipWindow), 1200);
       });
 
       // Clean up on close — move video back to original parent
