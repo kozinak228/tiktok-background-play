@@ -31,20 +31,29 @@
   function findActiveVideo() {
     // TikTok uses <video> tags — find the one that's currently playing
     // or the most visible one
-    const videos = document.querySelectorAll('video');
+    const videos = Array.from(document.querySelectorAll('video'));
     if (videos.length === 0) return null;
 
-    // Prefer a video that's currently playing
-    for (const v of videos) {
+    // Filter videos that are actually visible on screen
+    const visibleVideos = videos.filter(v => {
+      const rect = v.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0 && 
+             rect.top < window.innerHeight && rect.bottom > 0;
+    });
+
+    if (visibleVideos.length === 0) return null;
+
+    // Prefer a video that's currently playing and has data loaded
+    for (const v of visibleVideos) {
       if (!v.paused && v.readyState >= 2) return v;
     }
 
-    // Fallback: find the video closest to the center of the viewport
+    // Fallback: find the visible video closest to the center of the viewport
     let bestVideo = null;
     let bestDistance = Infinity;
     const centerY = window.innerHeight / 2;
 
-    for (const v of videos) {
+    for (const v of visibleVideos) {
       const rect = v.getBoundingClientRect();
       const videoCenterY = rect.top + rect.height / 2;
       const distance = Math.abs(videoCenterY - centerY);
@@ -79,19 +88,34 @@
         video.disablePictureInPicture = false;
       }
 
-      await video.requestPictureInPicture();
-      currentPipVideo = video;
-      pipButton.classList.add('pip-active');
+      if (video.readyState === 0) {
+        showNotification('Видео еще загружается, подождите секунду');
+        return;
+      }
 
-      // Listen for PiP close
-      video.addEventListener('leavepictureinpicture', () => {
-        pipButton.classList.remove('pip-active');
-        currentPipVideo = null;
-      }, { once: true });
+      try {
+        await video.requestPictureInPicture();
+        currentPipVideo = video;
+        pipButton.classList.add('pip-active');
+
+        // Listen for PiP close
+        video.addEventListener('leavepictureinpicture', () => {
+          pipButton.classList.remove('pip-active');
+          currentPipVideo = null;
+        }, { once: true });
+      } catch (err) {
+        console.error('[TikTok BG Play] PiP error:', err);
+        // "Picture-in-Picture is not available" usually means it's an audio-only video track (like a photo carousel)
+        if (err.message.includes('not available') || err.name === 'NotSupportedError') {
+          showNotification('PiP недоступен для этого поста (возможно, это фото-карусель)');
+        } else {
+          showNotification('Не удалось открыть PiP: ' + err.message);
+        }
+      }
 
     } catch (err) {
-      console.error('[TikTok BG Play] PiP error:', err);
-      showNotification('Не удалось открыть PiP: ' + err.message);
+      console.error('[TikTok BG Play] PiP wrapper error:', err);
+      showNotification('Произошла ошибка PiP');
     }
   }
 
@@ -116,23 +140,8 @@
     }, 3000);
   }
 
-  // ── Auto-resume paused videos on tab switch ─────────────────────
-  // Extra safety net: if TikTok somehow still pauses the video,
-  // we force-resume it after a short delay
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden) {
-      // The real visibility changed — but our inject.js blocks TikTok from seeing it
-      // As an extra measure, try to keep videos playing
-      setTimeout(() => {
-        const videos = document.querySelectorAll('video');
-        videos.forEach(v => {
-          if (v.paused && v.readyState >= 2 && !v.ended) {
-            v.play().catch(() => {});
-          }
-        });
-      }, 200);
-    }
-  });
+  // ── Auto-resume logic removed to prevent unpausing intentionally paused videos ──
+
 
   // ── Watch for new videos loaded via SPA navigation ──────────────
   const observer = new MutationObserver(() => {
