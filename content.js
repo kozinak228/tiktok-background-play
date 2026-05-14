@@ -178,15 +178,21 @@
       `;
       pipWindow.document.head.appendChild(style);
 
-      // Clone the video into the PiP window
-      const clonedVideo = video.cloneNode(true);
-      clonedVideo.src = video.src;
-      clonedVideo.currentTime = video.currentTime;
-      clonedVideo.muted = video.muted;
-      clonedVideo.volume = video.volume;
-      clonedVideo.autoplay = true;
-      clonedVideo.loop = true;
-      pipWindow.document.body.appendChild(clonedVideo);
+      // Move the actual video element from TikTok into the PiP window.
+      // This is the most reliable way — blob URLs and MediaSource stay attached.
+      const videoParent = video.parentNode;
+      const videoNextSibling = video.nextSibling;
+
+      // Create a placeholder so we know where to put the video back
+      const placeholder = document.createElement('div');
+      placeholder.id = '__tiktok_pip_placeholder__';
+      placeholder.style.display = 'none';
+      videoParent.insertBefore(placeholder, videoNextSibling);
+
+      // Style the video for the PiP window
+      video.style.cssText = 'width:100%;height:100%;object-fit:contain;';
+      pipWindow.document.body.appendChild(video);
+      video.play().catch(() => {});
 
       // Add scroll controls (prev/next)
       const controls = pipWindow.document.createElement('div');
@@ -213,8 +219,15 @@
         setTimeout(() => swapDocPipVideo(pipWindow), 800);
       });
 
-      // Clean up on close
+      // Clean up on close — move video back to original parent
       pipWindow.addEventListener('pagehide', () => {
+        const ph = document.getElementById('__tiktok_pip_placeholder__');
+        const movedVideo = pipWindow.document.querySelector('video');
+        if (movedVideo && ph && ph.parentNode) {
+          movedVideo.style.cssText = '';
+          ph.parentNode.insertBefore(movedVideo, ph);
+          ph.remove();
+        }
         docPipWindow = null;
         pipButton.classList.remove('pip-active');
       });
@@ -232,12 +245,27 @@
     const newVideo = findActiveVideo();
     if (!newVideo) return;
 
+    // Return old video to its placeholder first
+    const oldPlaceholder = document.getElementById('__tiktok_pip_placeholder__');
     const oldVideo = pipWindow.document.querySelector('video');
-    if (oldVideo) {
-      oldVideo.src = newVideo.src;
-      oldVideo.currentTime = 0;
-      oldVideo.play().catch(() => {});
+    if (oldVideo && oldPlaceholder && oldPlaceholder.parentNode) {
+      oldVideo.style.cssText = '';
+      oldPlaceholder.parentNode.insertBefore(oldVideo, oldPlaceholder);
+      oldPlaceholder.remove();
     }
+
+    // Create new placeholder for the new video
+    const newParent = newVideo.parentNode;
+    const newNextSibling = newVideo.nextSibling;
+    const newPlaceholder = document.createElement('div');
+    newPlaceholder.id = '__tiktok_pip_placeholder__';
+    newPlaceholder.style.display = 'none';
+    newParent.insertBefore(newPlaceholder, newNextSibling);
+
+    // Move new video into PiP
+    newVideo.style.cssText = 'width:100%;height:100%;object-fit:contain;';
+    pipWindow.document.body.insertBefore(newVideo, pipWindow.document.querySelector('.pip-controls'));
+    newVideo.play().catch(() => {});
   }
 
   // ── Toggle PiP mode ────────────────────────────────────────────
