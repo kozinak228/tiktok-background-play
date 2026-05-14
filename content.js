@@ -6,6 +6,25 @@
 
   let pipButton = null;
   let currentPipVideo = null;
+  let pipTrackerInterval = null;
+
+  // ── Setup Media Session for scrolling via PiP buttons ───────────
+  function setupMediaSession() {
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.setActionHandler('nexttrack', () => {
+        // Эмуляция нажатия стрелки вниз
+        document.dispatchEvent(new KeyboardEvent('keydown', {
+          key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, bubbles: true, cancelable: true
+        }));
+      });
+      navigator.mediaSession.setActionHandler('previoustrack', () => {
+        // Эмуляция нажатия стрелки вверх
+        document.dispatchEvent(new KeyboardEvent('keydown', {
+          key: 'ArrowUp', code: 'ArrowUp', keyCode: 38, bubbles: true, cancelable: true
+        }));
+      });
+    }
+  }
 
   // ── Create the PiP floating button ──────────────────────────────
   function createPipButton() {
@@ -29,26 +48,26 @@
 
   // ── Find the currently playing video ────────────────────────────
   function findActiveVideo() {
-    // TikTok uses <video> tags — find the one that's currently playing
-    // or the most visible one
     const videos = Array.from(document.querySelectorAll('video'));
     if (videos.length === 0) return null;
 
-    // Filter videos that are actually visible on screen
+    // Filter out hidden or tiny videos (e.g. background ads or preloaded next videos)
     const visibleVideos = videos.filter(v => {
       const rect = v.getBoundingClientRect();
-      return rect.width > 0 && rect.height > 0 && 
+      const style = window.getComputedStyle(v);
+      return rect.width > 50 && rect.height > 50 && 
+             style.opacity !== '0' && style.visibility !== 'hidden' &&
              rect.top < window.innerHeight && rect.bottom > 0;
     });
 
     if (visibleVideos.length === 0) return null;
 
-    // Prefer a video that's currently playing and has data loaded
+    // First priority: A video that is currently playing
     for (const v of visibleVideos) {
       if (!v.paused && v.readyState >= 2) return v;
     }
 
-    // Fallback: find the visible video closest to the center of the viewport
+    // Second priority: The visible video closest to the center of the viewport
     let bestVideo = null;
     let bestDistance = Infinity;
     const centerY = window.innerHeight / 2;
@@ -66,6 +85,33 @@
     return bestVideo;
   }
 
+  // ── Auto-track new videos while in PiP ──────────────────────────
+  function startPipTracker() {
+    if (pipTrackerInterval) clearInterval(pipTrackerInterval);
+    
+    pipTrackerInterval = setInterval(async () => {
+      if (!document.pictureInPictureElement) {
+        clearInterval(pipTrackerInterval);
+        pipTrackerInterval = null;
+        pipButton.classList.remove('pip-active');
+        return;
+      }
+
+      const active = findActiveVideo();
+      // If the page scrolled to a new video, swap the PiP window to it seamlessly!
+      if (active && active !== document.pictureInPictureElement && !active.paused && active.readyState >= 2) {
+        try {
+          active.disablePictureInPicture = false;
+          active.removeAttribute('disablepictureinpicture');
+          await active.requestPictureInPicture();
+          currentPipVideo = active;
+        } catch (e) {
+          console.log('[TikTok BG Play] Silent PiP swap failed:', e);
+        }
+      }
+    }, 500);
+  }
+
   // ── Toggle PiP mode ────────────────────────────────────────────
   async function togglePiP() {
     try {
@@ -74,6 +120,7 @@
         await document.exitPictureInPicture();
         pipButton.classList.remove('pip-active');
         currentPipVideo = null;
+        if (pipTrackerInterval) clearInterval(pipTrackerInterval);
         return;
       }
 
@@ -83,10 +130,10 @@
         return;
       }
 
-      // Some videos might not allow PiP, handle gracefully
-      if (video.disablePictureInPicture) {
-        video.disablePictureInPicture = false;
-      }
+      // Hard-force PiP enabling (fixes the "not available" error on some normal videos)
+      video.disablePictureInPicture = false;
+      video.removeAttribute('disablepictureinpicture');
+      video.setAttribute('controlslist', 'nodownload'); // Sometimes helps trick browser policies
 
       if (video.readyState === 0) {
         showNotification('Видео еще загружается, подождите секунду');
@@ -97,15 +144,24 @@
         await video.requestPictureInPicture();
         currentPipVideo = video;
         pipButton.classList.add('pip-active');
+        
+        // Start tracking to automatically swap PiP when scrolling
+        startPipTracker();
 
         // Listen for PiP close
         video.addEventListener('leavepictureinpicture', () => {
-          pipButton.classList.remove('pip-active');
-          currentPipVideo = null;
+          // Only remove active state if we didn't just swap to a new PiP video
+          setTimeout(() => {
+            if (!document.pictureInPictureElement) {
+              pipButton.classList.remove('pip-active');
+              currentPipVideo = null;
+              if (pipTrackerInterval) clearInterval(pipTrackerInterval);
+            }
+          }, 100);
         }, { once: true });
+        
       } catch (err) {
-        console.error('[TikTok BG Play] PiP error:', err);
-        // "Picture-in-Picture is not available" usually means it's an audio-only video track (like a photo carousel)
+        console.error('[TikTok BG Play] PiP request error:', err);
         if (err.message.includes('not available') || err.name === 'NotSupportedError') {
           showNotification('PiP недоступен для этого поста (возможно, это фото-карусель)');
         } else {
@@ -140,21 +196,14 @@
     }, 3000);
   }
 
-  // ── Auto-resume logic removed to prevent unpausing intentionally paused videos ──
-
-
   // ── Watch for new videos loaded via SPA navigation ──────────────
   const observer = new MutationObserver(() => {
-    // Keep monitoring — TikTok is a SPA, new videos appear dynamically
     if (!document.getElementById('tiktok-pip-btn')) {
       createPipButton();
     }
   });
 
-  observer.observe(document.body, {
-    childList: true,
-    subtree: true
-  });
+  observer.observe(document.body, { childList: true, subtree: true });
 
   // ── Keyboard shortcut: Alt+P to toggle PiP ─────────────────────
   document.addEventListener('keydown', (e) => {
@@ -165,6 +214,8 @@
   });
 
   // ── Initialize ──────────────────────────────────────────────────
+  setupMediaSession();
   createPipButton();
-  console.log('[TikTok BG Play] ✅ PiP button and auto-resume ready');
+  console.log('[TikTok BG Play] ✅ PiP button and smart-scrolling ready');
 })();
+
